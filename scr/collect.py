@@ -83,6 +83,7 @@ def main(args):
 
     hidden = 256
     max_episodes = args.max_episodes
+    max_steps = args.num_steps
     dataset_save_path = args.save_path
     min_burnin = args.min_burnin
     max_burnin = args.max_burnin
@@ -156,7 +157,7 @@ def main(args):
             state = next_state
 
             num_samples = len(replay_buffer[-1]['obs'])
-            if num_samples == 10:
+            if num_samples == max_steps:
                 done = True
 
             if done:
@@ -168,7 +169,7 @@ def main(args):
                 prev_state = state
 
                 # check if episode was long enough
-                if num_samples != 10:
+                if num_samples != max_steps:
                     del replay_buffer[-1]
 
                 # termination condition
