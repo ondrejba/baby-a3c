@@ -1,6 +1,7 @@
 import argparse
 import copy as cp
 import gym
+import h5py
 import numpy as np
 from PIL import Image
 import torch
@@ -79,6 +80,24 @@ def replay_init_episode(replay_buffer):
     })
 
 
+def construct_start_states_set(dup_paths):
+
+    blacklist_state_ids = set()
+
+    for path in dup_paths:
+
+        f = h5py.File(path, "r")
+
+        # iterate over all episodes, stored in a dict
+        for ep in f.values():
+            # cheap way of making an immutable array
+            blacklist_state_ids.add(ep['state_ids'][0].tobytes())
+
+        f.close()
+
+    return blacklist_state_ids
+
+
 def main(args):
 
     hidden = 256
@@ -111,6 +130,10 @@ def main(args):
 
     replay_buffer = []
 
+    blacklist_state_ids = None
+    if args.check_dup_paths:
+        blacklist_state_ids = construct_start_states_set(args.check_dup_paths)
+
     # TODO: what are the max episodes in the envs, does the C-SWM repo change that?
     with torch.no_grad():
 
@@ -135,6 +158,32 @@ def main(args):
                 action = action.numpy()[0]
 
             next_state, reward, done, _ = env.step(action)
+            # print(reward, done, start_collection, env.env.ale.lives())
+            # import matplotlib.pyplot as plt
+            # if start_collection:
+            #     print(episode_length)
+            #     plt.subplot(1, 2, 1)
+            #     plt.imshow(state)
+            #     plt.subplot(1, 2, 2)
+            #     plt.imshow(next_state)
+            #     plt.pause(0.05)
+
+            if env_name == 'PongDeterministic-v4':
+                # reset when we win/lose a round (pos/neg reward)
+                if reward != 0:
+                    done = True
+            elif env_name == 'SpaceInvadersDeterministic-v4':
+                # reset when we lose life (we start with 3 lives)
+                if env.env.ale.lives() != 3:
+                    done = True
+
+            if blacklist_state_ids is not None:
+                # first step of data collection
+                if episode_length == burnin_steps + 1:
+                    # if this start state exists in the training set, go to the next episode
+                    if replay_buffer[-1]['state_ids'][-1].tobytes() in blacklist_state_ids:
+                        print("duplicate start state, skip episode")
+                        done = True
 
             if start_collection:
                 state_replay = np.concatenate(
@@ -161,7 +210,7 @@ def main(args):
                 done = True
 
             if done:
-                print("ep {:d}".format(len(replay_buffer)))
+                print("ep {:d}, length: {:d}".format(len(replay_buffer), episode_length))
 
                 hx = reset_rnn_state()
                 episode_length, epr, eploss = 0, 0, 0
@@ -176,6 +225,7 @@ def main(args):
                 if len(replay_buffer) == max_episodes:
                     break
 
+                burnin_steps = np.random.randint(min_burnin, max_burnin)
                 replay_init_episode(replay_buffer)
 
     env.close()
@@ -189,6 +239,7 @@ parser.add_argument("--max-burnin", type=int, default=None)
 parser.add_argument("--max-episodes", type=int, default=None)
 parser.add_argument("--num-steps", type=int, default=None)
 parser.add_argument("--save-path", default=None)
+parser.add_argument("--check-dup-paths", nargs="+", default=None)
 parser.add_argument("--seed", type=int, default=0)
 parsed = parser.parse_args()
 main(parsed)
