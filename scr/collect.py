@@ -44,11 +44,22 @@ def init_random_agent(env):
     return RandomAgent(env.action_space)
 
 
-def select_action(state, model, hx):
+def select_action(state, model, hx, eps):
 
     value, logit, hx = model((state.view(1, 1, 80, 80), hx))
     logp = F.log_softmax(logit, dim=-1)
-    return torch.exp(logp).multinomial(num_samples=1).data[0]
+
+    if eps is not None:
+        # use epsilon greedy
+        if np.random.uniform(0, 1) < eps:
+            # random action
+            return np.random.randint(logp.size(1))
+        else:
+            return torch.argmax(logp, dim=1).numpy()[0]
+    else:
+        # sample from softmax
+        action = torch.exp(logp).multinomial(num_samples=1).data[0]
+        return action.numpy()[0]
 
 
 def reset_rnn_state():
@@ -154,8 +165,7 @@ def main(args):
             if start_collection:
                 action = random_agent.act(None, None, None)
             else:
-                action = select_action(preprocess_state(state), model, hx)
-                action = action.numpy()[0]
+                action = select_action(preprocess_state(state), model, hx, args.eps)
 
             next_state, reward, done, _ = env.step(action)
             # print(reward, done, start_collection, env.env.ale.lives())
@@ -170,7 +180,10 @@ def main(args):
 
             if env_name == 'PongDeterministic-v4':
                 # reset when we win/lose a round (pos/neg reward)
-                if reward != 0:
+                # don't reset once we are collecting random data
+                # if we do reset, the dataset is extremely limited
+                # because we only allow full 10-step episodes
+                if reward != 0 and not start_collection:
                     done = True
             elif env_name == 'SpaceInvadersDeterministic-v4':
                 # reset when we lose life (we start with 3 lives)
@@ -240,6 +253,7 @@ parser.add_argument("--max-episodes", type=int, default=None)
 parser.add_argument("--num-steps", type=int, default=None)
 parser.add_argument("--save-path", default=None)
 parser.add_argument("--check-dup-paths", nargs="+", default=None)
+parser.add_argument("--eps", type=float, default=None)
 parser.add_argument("--seed", type=int, default=0)
 parsed = parser.parse_args()
 main(parsed)
